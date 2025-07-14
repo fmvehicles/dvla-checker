@@ -1,21 +1,21 @@
 const express = require('express');
+const bodyParser = require('body-parser');
 const puppeteer = require('puppeteer-core');
 const { executablePath } = require('puppeteer');
-const bodyParser = require('body-parser');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+
 app.use(bodyParser.json());
 
-// Health check
 app.get('/', (req, res) => {
-  res.send('DVLA Verifier API is running.');
+  res.send('DVLA Verifier API is running');
 });
 
-// Verification endpoint
 app.post('/verify', async (req, res) => {
-  const { licenceNumber, postcode, nationalInsurance } = req.body;
+  const { licenceNumber, lastName, postcode, dob } = req.body;
 
-  if (!licenceNumber || !postcode || !nationalInsurance) {
+  if (!licenceNumber || !lastName || !postcode || !dob) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
@@ -23,55 +23,50 @@ app.post('/verify', async (req, res) => {
     const browser = await puppeteer.launch({
       headless: true,
       executablePath: executablePath(),
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
     const page = await browser.newPage();
-
-    // Step 1: Go to DVLA view driving record page
     await page.goto('https://www.viewdrivingrecord.service.gov.uk/driving-record/licence-number', {
-      waitUntil: 'domcontentloaded',
+      waitUntil: 'networkidle2'
     });
 
-    // Step 2: Fill form
-    await page.type('#driving-licence-number', licenceNumber, { delay: 100 });
-    await page.type('#postcode', postcode, { delay: 100 });
-    await page.type('#nin', nationalInsurance, { delay: 100 });
+    // Fill the form fields
+    await page.type('#driving-licence-number', licenceNumber);
+    await page.type('#last-name', lastName);
+    await page.type('#postcode', postcode);
+    await page.type('#dob-day', dob.split('-')[2]);
+    await page.type('#dob-month', dob.split('-')[1]);
+    await page.type('#dob-year', dob.split('-')[0]);
 
-    // Step 3: Submit the form
+    // Click 'View Now'
     await Promise.all([
-      page.click('button[type="submit"]'),
       page.waitForNavigation({ waitUntil: 'networkidle2' }),
+      page.click('button[type="submit"]')
     ]);
 
-    // Step 4: Check if login succeeded
-    const pageTitle = await page.title();
-    const success = pageTitle.includes('Driving record') || page.url().includes('/driving-record/');
-
-    if (!success) {
+    const pageURL = page.url();
+    if (!pageURL.includes('/driving-licence')) {
       await browser.close();
-      return res.status(401).json({ error: 'Verification failed. Check your details.' });
+      return res.status(401).json({ error: 'Verification failed', reason: 'Invalid credentials' });
     }
 
-    // Step 5: Extract details (example - you can customize this)
-    const name = await page.$eval('.govuk-heading-l', el => el.textContent.trim());
-    const licenceValidTo = await page.$eval('.column-two-thirds .column-two-thirds .govuk-summary-list .govuk-summary-list__value', el => el.textContent.trim());
+    // Example: extract name & licence status
+    const data = await page.evaluate(() => {
+      const name = document.querySelector('.column-two-thirds h1')?.innerText;
+      const status = document.querySelector('.column-two-thirds .summary-item p')?.innerText;
+      return { name, status };
+    });
 
     await browser.close();
+    res.status(200).json({ success: true, data });
 
-    return res.json({
-      success: true,
-      name,
-      licenceValidTo,
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Automation failed', details: err.message });
+  } catch (error) {
+    console.error('Verification Error:', error);
+    res.status(500).json({ error: 'Verification failed', details: error.message });
   }
 });
 
-// Start the server
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`DVLA Verifier running on port ${PORT}`);
 });

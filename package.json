@@ -4,7 +4,6 @@
   "description": "DVLA verification API using Puppeteer",
   "main": "index.js",
   "scripts": {
-    "postinstall": "npx puppeteer install",
     "start": "node index.js"
   },
   "keywords": [],
@@ -13,6 +12,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.1.0",
-    "puppeteer": "^24.12.1"
+    "puppeteer-core": "^24.12.1",
+    "body-parser": "^1.20.2"
   }
 }
