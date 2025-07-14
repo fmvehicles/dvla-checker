@@ -1,22 +1,23 @@
-const express = require(express);
-const cors = require(cors);
+const express = require("express");
+const bodyParser = require("body-parser");
+
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(cors());
-app.use(express.json());
+app.use(bodyParser.json());
 
-app.post(verify, async (req, res) = {
-    const { licence_number, postcode, national_insurance, share_code } = req.body;
+app.post("/verify", (req, res) => {
+  // Only here destructure req.body
+  const { licence_number, postcode, national_insurance, share_code } = req.body;
 
-    if (!licence_number  !postcode  !national_insurance  !share_code) {
-        return res.status(400).json({ error Missing required fields });
-    }
-
-     Puppeteer logic will go here in next steps
-    res.json({ message Stub for DVLA check received, data req.body });
+  // Your verification logic here
+  res.json({
+    success: true,
+    message: "DVLA verification simulated",
+    data: { licence_number, postcode, national_insurance, share_code }
+  });
 });
 
-app.listen(port, () = {
-    console.log(`DVLA Verifier API running on port ${port}`);
+app.listen(port, () => {
+  console.log(`Server started on port ${port}`);
 });
