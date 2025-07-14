@@ -4,7 +4,7 @@
   "description": "DVLA verification API using Puppeteer",
   "main": "index.js",
   "scripts": {
-    "postinstall": "puppeteer install",
+    "postinstall": "npx puppeteer install",
     "start": "node index.js"
   },
   "keywords": [],
