@@ -22,64 +22,69 @@ app.post('/verify', async (req, res) => {
   try {
     browser = await chromium.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
     const context = await browser.newContext({
       userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-      viewport: { width: 1280, height: 800 },
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.5735.133 Safari/537.36',
+      viewport: { width: 1280, height: 800 }
     });
 
     const page = await context.newPage();
 
-    await page.goto(
-      'https://www.viewdrivingrecord.service.gov.uk/driving-record/licence-number',
-      { waitUntil: 'domcontentloaded', timeout: 30000 }
-    );
+    // Go to DVLA page
+    await page.goto('https://www.viewdrivingrecord.service.gov.uk/driving-record/licence-number', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
 
-    // Accept cookies if visible
+    // Wait for the form OR take screenshot if fails
     try {
-      await page.click('button[name="cookies-accept"]', { timeout: 3000 });
+      await page.waitForSelector('#driving-licence-number', { timeout: 10000 });
     } catch (e) {
-      // Cookie popup not shown
+      await page.screenshot({ path: 'form_load_error.png' });
+      throw new Error("Licence number input field not found. Screenshot saved as form_load_error.png");
     }
 
-    await page.waitForSelector('#driving-licence-number', { timeout: 10000 });
+    // Accept cookies
+    try {
+      await page.click('button[name="cookies-accept"]', { timeout: 3000 });
+    } catch (e) {}
+
+    // Fill out form
     await page.fill('#driving-licence-number', licence_number);
     await page.fill('#national-insurance-number', nin);
     await page.fill('#postcode', postcode);
     await page.check('#terms-and-conditions');
 
+    // Submit form
     await Promise.all([
-      page.waitForNavigation({ timeout: 20000 }),
-      page.click('button[type="submit"]'),
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }),
+      page.click('button[type="submit"]')
     ]);
 
-    // Check for error
-    let errorText = null;
-    try {
-      const errorEl = await page.$('.error-message');
-      if (errorEl) errorText = await errorEl.textContent();
-    } catch (_) {}
-
-    if (errorText) {
+    // Check for errors
+    const errorMessage = await page.$('.error-message');
+    if (errorMessage) {
+      const text = await errorMessage.textContent();
       return res.status(400).json({
         error: 'Verification failed',
-        details: errorText.trim(),
+        details: text.trim()
       });
     }
 
-    // Check if success
-    const successHeading = await page.textContent('h1');
-    res.status(200).json({
+    // Get heading as success
+    const heading = await page.textContent('h1');
+    res.json({
       success: true,
-      message: successHeading?.trim() || 'Verified successfully',
+      message: heading.trim() || 'Verified successfully'
     });
+
   } catch (error) {
     res.status(500).json({
       error: 'Verification failed',
-      details: error.message,
+      details: error.message
     });
   } finally {
     if (browser) await browser.close();
