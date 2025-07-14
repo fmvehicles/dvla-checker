@@ -5,29 +5,40 @@ const app = express();
 app.use(express.json());
 
 app.post('/verify', async (req, res) => {
-  const { licence_number, last_name, postcode } = req.body;
+  const { licence_number, nin, postcode } = req.body;
+
+  if (!licence_number || !nin || !postcode) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
 
   try {
-    const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
-
     await page.goto('https://www.viewdrivingrecord.service.gov.uk/driving-record/licence-number');
 
     await page.fill('#driving-licence-number', licence_number);
-    await page.fill('#last-name', last_name);
+    await page.fill('#national-insurance-number', nin);
     await page.fill('#postcode', postcode);
-    await page.click('button[type=submit]');
+    await page.check('#terms-and-conditions');
+    await page.click('button[type="submit"]');
 
-    await page.waitForTimeout(3000); // Wait for page response
+    await page.waitForNavigation({ timeout: 10000 });
 
-    // You can scrape details here...
+    // Example: Check for success by checking if a known dashboard element exists
+    const success = await page.$('h1, .govuk-panel__title');
 
+    if (success) {
+      res.json({ success: true, message: 'DVLA Record Verified ✅' });
+    } else {
+      res.status(403).json({ error: 'Verification failed' });
+    }
+
+  } catch (err) {
+    res.status(500).json({ error: 'Verification failed', details: err.message });
+  } finally {
     await browser.close();
-
-    res.json({ success: true, message: 'Verification complete.' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Verification failed', details: error.message });
   }
 });
 
