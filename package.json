@@ -1,14 +1,15 @@
 {
   "name": "dvla-checker",
   "version": "1.0.0",
+  "description": "DVLA verification API using Puppeteer",
   "main": "index.js",
   "scripts": {
+    "postinstall": "puppeteer install",
     "start": "node index.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.1.0",
