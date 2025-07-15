@@ -20,63 +20,73 @@ app.post('/verify', async (req, res) => {
   let browser;
 
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
 
     const context = await browser.newContext({
       userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-      viewport: { width: 1280, height: 800 },
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.5735.133 Safari/537.36',
+      viewport: { width: 1280, height: 800 }
     });
 
     const page = await context.newPage();
 
-    await page.goto(
-      'https://www.viewdrivingrecord.service.gov.uk/driving-record/licence-number',
-      { waitUntil: 'domcontentloaded' }
-    );
+    // Go to DVLA page
+    await page.goto('https://www.viewdrivingrecord.service.gov.uk/driving-record/licence-number', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
 
-    // Accept cookies if shown
+    // Wait for the form OR take screenshot if fails
     try {
-      await page.click('button[name="cookies-accept"]', { timeout: 3000 });
+      await page.waitForSelector('#wizard_view_driving_licence_enter_details_driving_licence_number', { timeout: 10000 });
     } catch (e) {
-      // Ignore if cookie banner not found
+      await page.screenshot({ path: 'form_load_error.png' });
+      throw new Error("Licence number input field not found. Screenshot saved as form_load_error.png");
     }
 
-    // Wait for and fill the form
-    await page.waitForSelector('#wizard_view_driving_licence_enter_details_driving_licence_number', { timeout: 15000 });
+    // Accept cookies
+    try {
+      await page.click('button[name="cookies-accept"]', { timeout: 3000 });
+    } catch (e) {}
 
-    await page.fill('#wizard_view_driving_licence_enter_details_driving_licence_number', licence_number.toUpperCase());
-    await page.fill('#wizard_view_driving_licence_enter_details_national_insurance_number', nin.toUpperCase());
-    await page.fill('#wizard_view_driving_licence_enter_details_post_code', postcode.toUpperCase());
+    // Fill out form
+    await page.fill('#wizard_view_driving_licence_enter_details_driving_licence_number', licence_number);
+    await page.fill('#wizard_view_driving_licence_enter_details_national_insurance_number', nin);
+    await page.fill('#wizard_view_driving_licence_enter_details_post_code', postcode);
 
+    // Check the "data sharing confirmation" box
     await page.check('#wizard_view_driving_licence_enter_details_data_sharing_confirmation');
 
     // Submit the form
     await Promise.all([
-      page.waitForNavigation({ timeout: 15000 }),
-      page.click('#view-now'),
+      page.waitForNavigation(),
+      page.click('#view-now')
     ]);
 
-    // Check if error exists
-    const errorMessage = await page.locator('.govuk-error-summary__body').first().textContent().catch(() => null);
+    // Check for errors
+    const errorMessage = await page.$('.error-message');
     if (errorMessage) {
+      const text = await errorMessage.textContent();
       return res.status(400).json({
         error: 'Verification failed',
-        details: errorMessage.trim(),
+        details: text.trim()
       });
     }
 
-    // Example check – can be adjusted based on success page structure
-    const headerText = await page.textContent('h1');
+    // Get heading as success
+    const heading = await page.textContent('h1');
     res.json({
       success: true,
-      message: headerText ? headerText.trim() : 'Verified successfully',
+      message: heading.trim() || 'Verified successfully'
     });
 
   } catch (error) {
     res.status(500).json({
       error: 'Verification failed',
-      details: error.message,
+      details: error.message
     });
   } finally {
     if (browser) await browser.close();
