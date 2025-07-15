@@ -1,12 +1,3 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const { chromium } = require('playwright');
-
-const app = express();
-const PORT = process.env.PORT || 10000;
-
-app.use(bodyParser.json());
-
 app.post('/verify', async (req, res) => {
   const { licence_number, nin, postcode } = req.body;
 
@@ -33,13 +24,11 @@ app.post('/verify', async (req, res) => {
 
     const page = await context.newPage();
 
-    // Go to DVLA page
     await page.goto('https://www.viewdrivingrecord.service.gov.uk/driving-record/licence-number', {
       waitUntil: 'domcontentloaded',
       timeout: 30000,
     });
 
-    // Wait for the form input field
     try {
       await page.waitForSelector('#wizard_view_driving_licence_enter_details_driving_licence_number', { timeout: 10000 });
     } catch (e) {
@@ -47,29 +36,23 @@ app.post('/verify', async (req, res) => {
       throw new Error("Licence number input field not found. Screenshot saved as form_load_error.png");
     }
 
-    // Accept cookies (if visible)
     try {
       await page.click('button[name="cookies-accept"]', { timeout: 3000 });
     } catch (e) {}
 
-    // Fill the form
     await page.fill('#wizard_view_driving_licence_enter_details_driving_licence_number', licence_number);
     await page.fill('#wizard_view_driving_licence_enter_details_national_insurance_number', nin);
     await page.fill('#wizard_view_driving_licence_enter_details_post_code', postcode);
 
-    // Check the data sharing box
     await page.check('#wizard_view_driving_licence_enter_details_data_sharing_confirmation');
 
-    // Submit the form and wait for navigation
     await Promise.all([
       page.waitForNavigation(),
       page.click('#view-now')
     ]);
 
-    // Get the page heading
     const heading = await page.textContent('h1');
 
-    // If still on "Enter details", something went wrong
     if (heading.trim() === 'Enter details') {
       const errorSummary = await page.$('.govuk-error-summary');
       const errorText = errorSummary
@@ -84,10 +67,69 @@ app.post('/verify', async (req, res) => {
       });
     }
 
-    // Success
+    // Extract "Your details"
+    const yourDetails = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('#your-details dl.govuk-summary-list > div.govuk-summary-list__row')];
+      const details = {};
+      rows.forEach(row => {
+        const key = row.querySelector('.govuk-summary-list__key')?.textContent.trim();
+        const value = row.querySelector('.govuk-summary-list__value')?.textContent.trim();
+        if (key && value) {
+          details[key.replace(':', '')] = value;
+        }
+      });
+      return details;
+    });
+
+    // Extract "Driving licence details" (same method, different section)
+    const licenceDetails = await page.evaluate(() => {
+      const section = [...document.querySelectorAll('#your-details dl.govuk-summary-list')];
+      // Second summary list contains licence details
+      const rows = section[1] ? [...section[1].querySelectorAll('div.govuk-summary-list__row')] : [];
+      const details = {};
+      rows.forEach(row => {
+        const key = row.querySelector('.govuk-summary-list__key')?.textContent.trim();
+        const value = row.querySelector('.govuk-summary-list__value')?.textContent.trim();
+        if (key && value) {
+          details[key.replace(':', '')] = value;
+        }
+      });
+      return details;
+    });
+
+    // Extract "Entitlements" categories and descriptions
+    const entitlements = await page.evaluate(() => {
+      const categories = [];
+      const sections = document.querySelectorAll('#Entitlements .govuk-accordion__section');
+      sections.forEach(section => {
+        const categoryName = section.querySelector('h3.govuk-accordion__section-heading button')?.textContent.trim();
+        const validity = {};
+        const validFromElem = section.querySelector('p.govuk-body.entitlement-dates strong:nth-child(1)');
+        const validToElem = section.querySelector('p.govuk-body.entitlement-dates strong:nth-child(2)');
+        const validFrom = validFromElem ? validFromElem.textContent.trim() : null;
+        const validTo = validToElem ? validToElem.textContent.trim() : null;
+        const description = section.querySelector('p.govuk-body[name^="legal-literal"]')?.textContent.trim();
+
+        categories.push({
+          category: categoryName,
+          validFrom,
+          validTo,
+          description
+        });
+      });
+      return categories;
+    });
+
+    // Extract penalties (text only)
+    const penaltiesText = await page.textContent('#Endorsements .govuk-grid-column-full p.govuk-heading-s');
+
     res.json({
       success: true,
-      message: heading.trim() || 'Verified successfully'
+      heading: heading.trim(),
+      yourDetails,
+      licenceDetails,
+      entitlements,
+      penalties: penaltiesText.trim()
     });
 
   } catch (error) {
@@ -98,8 +140,4 @@ app.post('/verify', async (req, res) => {
   } finally {
     if (browser) await browser.close();
   }
-});
-
-app.listen(PORT, () => {
-  console.log(`DVLA Verifier running on port ${PORT}`);
 });
