@@ -1,9 +1,12 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const { chromium } = require('playwright');
+const cors = require('cors');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
+
+app.use(cors());
 
 app.use(bodyParser.json());
 
