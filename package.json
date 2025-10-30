@@ -16,6 +16,6 @@
     "playwright": "^1.54.1",
     "dotenv": "^16.3.1",
     "node-fetch": "^3.3.2",
-    "multer": "^1.4.5-lts.1"
+    "multer": "^2.0.2"
   }
 }
