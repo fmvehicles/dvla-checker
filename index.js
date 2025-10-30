@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 const upload = multer();
 
-const DVLA_API = "https://dvla-verifier.onrender.com/verify";
+const DVLA_API = "https://dvla-checker-1.onrender.com";
 const WP_MEDIA_URL = "https://driversnetwork.co.uk/wp-json/wp/v2/media";
 const WP_POST_URL = "https://driversnetwork.co.uk/wp-json/wp/v2/verification";
 
