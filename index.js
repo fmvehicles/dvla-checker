@@ -1,156 +1,168 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const { chromium } = require('playwright');
-const cors = require('cors');
+const fetch = require('node-fetch');
+const multer = require('multer');
+const FormData = require('form-data');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-app.use(cors());
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
-app.use(bodyParser.json());
+const upload = multer(); // for handling file uploads
 
-app.post('/verify', async (req, res) => {
-  const { licence_number, nin, postcode } = req.body;
+// WordPress credentials (server-side, not exposed to client)
+const WP_USER = 'khalilman88@gmail.com';
+const WP_PASS = 'UV8p qmqd W0AQ 2xpz 2I2F 3n7f';
+const WP_TOKEN = Buffer.from(`${WP_USER}:${WP_PASS}`).toString('base64');
+
+// Helper to upload image to WordPress media library
+async function uploadToWPMedia(blobBuffer, filename) {
+  const form = new FormData();
+  form.append('file', blobBuffer, { filename });
+  form.append('title', filename);
+  form.append('alt_text', filename);
+
+  const res = await fetch('https://driversnetwork.co.uk/wp-json/wp/v2/media', {
+    method: 'POST',
+    headers: { Authorization: `Basic ${WP_TOKEN}` },
+    body: form
+  });
+
+  if (!res.ok) throw new Error(`WP media upload failed: ${res.status}`);
+  const data = await res.json();
+  return data.source_url; // return uploaded image URL
+}
+
+// DVLA verification endpoint
+app.post('/verify', upload.fields([
+  { name: 'selfie', maxCount: 1 },
+  { name: 'licenceFront', maxCount: 1 },
+  { name: 'licenceBack', maxCount: 1 }
+]), async (req, res) => {
+  const { licence_number, nin, postcode, email, admin_ref } = req.body;
+  const files = req.files;
 
   if (!licence_number || !nin || !postcode) {
-    return res.status(400).json({
-      error: 'Missing required fields',
-      details: 'licence_number, nin, and postcode are required',
-    });
+    return res.status(400).json({ error: 'licence_number, nin, and postcode are required' });
+  }
+  if (!files?.selfie || !files?.licenceFront || !files?.licenceBack) {
+    return res.status(400).json({ error: 'All three images (selfie, licenceFront, licenceBack) are required' });
   }
 
   let browser;
-
   try {
     browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
-    const context = await browser.newContext({
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.5735.133 Safari/537.36',
-      viewport: { width: 1280, height: 800 }
-    });
-
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const page = await context.newPage();
 
-    // Go to DVLA driving licence number check page
-    await page.goto('https://www.viewdrivingrecord.service.gov.uk/driving-record/licence-number', {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000,
-    });
+    await page.goto('https://www.viewdrivingrecord.service.gov.uk/driving-record/licence-number', { waitUntil: 'domcontentloaded' });
 
-    // Accept cookies if visible
-    try {
-      await page.click('button[name="cookies-accept"]', { timeout: 3000 });
-    } catch {}
+    // Accept cookies if present
+    try { await page.click('button[name="cookies-accept"]', { timeout: 3000 }); } catch {}
 
-    // Fill the form fields
+    // Fill DVLA form
     await page.fill('#wizard_view_driving_licence_enter_details_driving_licence_number', licence_number);
     await page.fill('#wizard_view_driving_licence_enter_details_national_insurance_number', nin);
     await page.fill('#wizard_view_driving_licence_enter_details_post_code', postcode);
-
-    // Check data sharing confirmation
     await page.check('#wizard_view_driving_licence_enter_details_data_sharing_confirmation');
 
-    // Submit the form and wait for navigation
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
       page.click('#view-now')
     ]);
 
-    // Check page heading to confirm success
     const heading = (await page.textContent('h1'))?.trim() || '';
 
     if (heading === 'Enter details') {
-      // Error: Still on form page after submit
       const errorSummary = await page.$('.govuk-error-summary');
-      const errorText = errorSummary
-        ? (await errorSummary.textContent()).trim()
-        : 'Unknown error after form submission';
-      await page.screenshot({ path: 'error_after_submit.png' });
+      const errorText = errorSummary ? (await errorSummary.textContent()).trim() : 'Unknown error';
       return res.status(400).json({ error: 'Verification failed', details: errorText });
     }
 
-    // Now extract the key info from the results page
-
-    // Helper function to get text content safely
-    async function getText(selector) {
+    const getText = async selector => {
       const el = await page.$(selector);
-      if (!el) return null;
-      const txt = await el.textContent();
-      return txt ? txt.trim() : null;
-    }
+      return el ? (await el.textContent()).trim() : null;
+    };
 
-    // Extract your details
+    // Personal details
     const title = await getText('.govuk-summary-list__row:nth-child(1) .govuk-summary-list__value');
     const name = await getText('.govuk-summary-list__row:nth-child(2) .govuk-summary-list__value');
     const sex = await getText('.govuk-summary-list__row:nth-child(3) .govuk-summary-list__value');
     const dob = await getText('.govuk-summary-list__row:nth-child(4) .govuk-summary-list__value');
     const address = await getText('.govuk-summary-list__row:nth-child(5) .govuk-summary-list__value');
 
-    // Extract driving licence details
+    // Driving licence details
     const licence_status = await getText('.govuk-summary-list:nth-of-type(2) .govuk-summary-list__row:nth-child(1) .govuk-summary-list__value');
     const valid_from = await getText('.govuk-summary-list:nth-of-type(2) .govuk-summary-list__row:nth-child(2) .govuk-summary-list__value');
     const valid_to = await getText('.govuk-summary-list:nth-of-type(2) .govuk-summary-list__row:nth-child(3) .govuk-summary-list__value');
     const licence_number_extracted = await getText('.govuk-summary-list:nth-of-type(2) .govuk-summary-list__row:nth-child(4) .govuk-summary-list__value');
     const licence_issue_number = await getText('.govuk-summary-list:nth-of-type(2) .govuk-summary-list__row:nth-child(5) .govuk-summary-list__value');
 
-    // Extract entitlements
-    // Entitlements are in accordion sections - gather each category with validity and description
-    const entitlementSections = await page.$$('.govuk-accordion__section');
+    // Penalties
+    let penaltiesText = 'No penalties or disqualifications';
+    const penaltiesEl = await page.$('#Endorsements');
+    if (penaltiesEl) penaltiesText = (await penaltiesEl.textContent()).trim();
 
-    const entitlements = [];
-    for (const section of entitlementSections) {
-      const category = await section.$eval('h3 button', btn => btn.innerText.split(',')[1]?.trim() || '');
-      const validFrom = await section.$eval('.entitlements_value strong:nth-child(1)', el => el.innerText).catch(() => null);
-      const validTo = await section.$eval('.entitlements_value strong:nth-child(2)', el => el.innerText).catch(() => null);
-      const description = await section.$eval('p.govuk-body[name^="legal-literal"]', el => el.innerText).catch(() => null);
-      entitlements.push({
-        category,
-        validFrom,
-        validTo,
-        description,
-      });
-    }
+    // Upload images to WordPress
+    const selfieUrl = await uploadToWPMedia(files.selfie[0].buffer, 'selfie.jpg');
+    const licenceFrontUrl = await uploadToWPMedia(files.licenceFront[0].buffer, 'front.jpg');
+    const licenceBackUrl = await uploadToWPMedia(files.licenceBack[0].buffer, 'back.jpg');
 
-    // Extract penalties and disqualifications info
-    const penaltiesText = await getText('#Endorsements p.govuk-heading-s') || 'No penalties or disqualifications';
+    // Create WP post with ACF fields
+    const postBody = {
+      title: `Verification - ${name} - ${licence_number_extracted}`,
+      status: 'publish',
+      acf: {
+        full_name: name,
+        email: email || '',
+        admin_ref: admin_ref || '',
+        dob,
+        licence_number: licence_number_extracted,
+        issue_date: valid_from,
+        expiry_date: valid_to,
+        address,
+        licence_type: licence_status,
+        nin,
+        dvla_valid: true,
+        penalty_info: penaltiesText,
+        selfie_image: selfieUrl,
+        licence_front_image: licenceFrontUrl,
+        licence_back_image: licenceBackUrl
+      }
+    };
 
-    // Prepare response
+    const wpPostRes = await fetch('https://driversnetwork.co.uk/wp-json/wp/v2/verification', {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${WP_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(postBody)
+    });
+
+    if (!wpPostRes.ok) throw new Error(`WP post creation failed: ${wpPostRes.status}`);
+    const wpPostData = await wpPostRes.json();
+
     res.json({
       success: true,
-      heading,
-      personal_details: {
-        title,
-        name,
-        sex,
-        date_of_birth: dob,
-        address,
-      },
-      driving_licence_details: {
-        licence_status,
-        valid_from,
-        valid_to,
-        licence_number: licence_number_extracted,
-        licence_issue_number,
-      },
-      entitlements,
-      penalties_and_disqualifications: penaltiesText,
+      personal_details: { title, name, sex, dob, address },
+      driving_licence_details: { licence_status, valid_from, valid_to, licence_number: licence_number_extracted, licence_issue_number },
+      penalties: penaltiesText,
+      wordpress_post: wpPostData
     });
 
-  } catch (error) {
-    res.status(500).json({
-      error: 'Verification failed',
-      details: error.message,
-    });
+  } catch (err) {
+    res.status(500).json({ error: 'Verification failed', details: err.message });
   } finally {
     if (browser) await browser.close();
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`DVLA Verifier running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`DVLA Verifier + WP uploader running on port ${PORT}`));
