@@ -1,7 +1,6 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const { chromium } = require('playwright');
-const fetch = require('node-fetch');
 const multer = require('multer');
 const FormData = require('form-data');
 
